@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 from configs.config import cfg
 from datasets.ISIC import ISICDataset
 from datasets.tools import ResizeAndPad
-from ifp_alignment import IFPPointPromptGenerator
+from ifp_alignment import build_prompt_generator
 from model import Model
 from utils.eval_utils import AverageMeter, combine_instance_masks, remove_padding
 
@@ -58,15 +58,27 @@ def configure(
     experiment_dir: Path,
     root_dir: Path | None,
     test_list_override: Path | None,
+    prompt_backend: str,
+    prompt_checkpoint_override: Path | None = None,
 ) -> tuple[Path, Path, Path]:
     spec = SPECS[dataset]
     name = spec["config_name"]
     model_dir = experiment_dir / name
     checkpoint = model_dir / "save/best-student.pth"
-    alignment_checkpoint = experiment_dir / "ifp_alignment/ifp_medical_foreground_best.pt"
+    if prompt_checkpoint_override is not None:
+        alignment_checkpoint = prompt_checkpoint_override
+    elif prompt_backend == "dino-prototype":
+        alignment_checkpoint = experiment_dir / "ifp_alignment/dino_foreground_background_prototype.pt"
+    elif prompt_backend == "clip-only":
+        alignment_checkpoint = Path()
+    else:
+        alignment_checkpoint = experiment_dir / "ifp_alignment/ifp_medical_foreground_best.pt"
     test_list = test_list_override or experiment_dir / "lists/test.csv"
     root_dir = root_dir or spec["root"]
-    for path in (checkpoint, alignment_checkpoint, test_list):
+    required_paths = (checkpoint, test_list)
+    if prompt_backend not in {"clip-only", "no-prompt", "gt-oracle"}:
+        required_paths = (*required_paths, alignment_checkpoint)
+    for path in required_paths:
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -79,8 +91,8 @@ def configure(
     cfg.datasets[name].test_list = str(test_list)
     cfg.out_dir = str(model_dir)
     cfg.load_type = "soft"
-    cfg.prompt = "point"
-    cfg.prompt_generator.backend = "ifp"
+    cfg.prompt = "none" if prompt_backend == "no-prompt" else "point"
+    cfg.prompt_generator.backend = prompt_backend
     cfg.prompt_generator.ifp_root = str(IFP_ROOT)
     cfg.prompt_generator.alignment_checkpoint = str(alignment_checkpoint)
     cfg.prompt_generator.background_alignment_checkpoint = ""
@@ -109,7 +121,12 @@ def export(args: argparse.Namespace) -> None:
     root_dir = args.root_dir.resolve() if args.root_dir else None
     test_list_override = args.test_list.resolve() if args.test_list else None
     model_dir, checkpoint_path, test_list = configure(
-        args.dataset, experiment_dir, root_dir, test_list_override
+        args.dataset,
+        experiment_dir,
+        root_dir,
+        test_list_override,
+        args.prompt_backend,
+        args.prompt_checkpoint,
     )
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -121,7 +138,8 @@ def export(args: argparse.Namespace) -> None:
     model.load_state_dict(checkpoint["model"])
     model.to(device).eval()
 
-    prompt_generator = IFPPointPromptGenerator(
+    prompt_generator = build_prompt_generator(
+        cfg.prompt_generator.backend,
         device,
         checkpoint_path=cfg.prompt_generator.alignment_checkpoint,
         text_prompts=cfg.prompt_generator.text_prompts,
@@ -163,7 +181,9 @@ def export(args: argparse.Namespace) -> None:
         writer.writeheader()
         for names, paddings, original_images, images, gt_masks in dataloader:
             images = images.to(device)
-            prompts = prompt_generator(images)
+            prompts = (prompt_generator(images, gt_masks)
+                       if getattr(prompt_generator, "requires_gt_masks", False)
+                       else prompt_generator(images))
             _, pred_masks, _, _ = model(images, prompts)
             num_images = images.size(0)
 
@@ -202,6 +222,7 @@ def export(args: argparse.Namespace) -> None:
         "dataset": args.dataset,
         "experiment_dir": str(experiment_dir),
         "checkpoint": str(checkpoint_path),
+        "prompt_backend": args.prompt_backend,
         "best_validation_epoch": int(checkpoint.get("epoch", -1)),
         "checkpoint_selection_metric": "validation_mean_iou",
         "mask_logit_threshold": args.logit_threshold,
@@ -239,8 +260,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument(
-        "--logit-threshold", type=float, default=0.5,
-        help="Threshold applied directly to SAM2 mask logits.",
+        "--prompt-backend", choices=("ifp", "dino-prototype", "clip-only", "no-prompt", "gt-oracle"), default="ifp",
+    )
+    parser.add_argument(
+        "--prompt-checkpoint", type=Path,
+        help="Use a prompt-generator checkpoint from another experiment directory.",
+    )
+    parser.add_argument(
+        "--logit-threshold", type=float, default=0.0,
+        help="Threshold applied directly to SAM2 mask logits (0.0 equals probability 0.5).",
     )
     return parser.parse_args()
 

@@ -54,7 +54,7 @@ class Model(nn.Module):
     def image_size(self):
         return self.model.image_size
 
-    def forward(self, images, prompts):
+    def forward(self, images, prompts=None):
         _, _, H, W = images.shape
         image_embeddings = self.encode(images)
         pred_masks, ious, res_masks = self.decode((H, W), prompts)
@@ -90,26 +90,37 @@ class Model(nn.Module):
 
         return self.image_embeddings
 
-    def decode(self, image_shape, prompts):
+    def decode(self, image_shape, prompts=None):
         """Decode masks from image embeddings and prompts.
 
         Args:
             image_shape: (H, W) original image size
-            prompts: list of dicts with 'in_points' and/or 'in_box'
+            prompts: optional list of dicts with 'in_points' and/or 'in_box'.
+                When None, SAM2 receives no point, box, or mask prompt.
 
         Returns:
             pred_masks, ious, res_masks
         """
         if self.image_embeddings is None:
             raise RuntimeError("No image embeddings. Call encode() first.")
+        if prompts is None:
+            prompts = [None] * len(self.image_embeddings)
+        if len(prompts) != len(self.image_embeddings):
+            raise ValueError("Prompt count must match the encoded image batch size.")
+
+        multimask_output = False  # Old fair WeSAM protocol uses SAM2 single-mask decoding.
 
         pred_masks = []
         ious = []
         res_masks = []
 
         for i, (prompt, embedding) in enumerate(zip(prompts, self.image_embeddings)):
-            in_points = prompt.get("in_points", None)
-            input_box = prompt.get("in_box", None)
+            if prompt is None:
+                in_points = None
+                input_box = None
+            else:
+                in_points = prompt.get("in_points", None)
+                input_box = prompt.get("in_box", None)
 
             # Move to model device
             if in_points is not None:
@@ -125,6 +136,9 @@ class Model(nn.Module):
                                           device=embedding.device)
                 box_labels = box_labels.repeat(input_box.shape[0], 1)
                 concat_points = (box_coords, box_labels)
+
+            elif cfg.prompt == "none":
+                concat_points = None
 
             elif cfg.prompt == "point":
                 concat_points = in_points
@@ -165,10 +179,18 @@ class Model(nn.Module):
                 image_pe=self.model.sam_prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_embeddings,
                 dense_prompt_embeddings=dense_embeddings,
-                multimask_output=False,
+                multimask_output=multimask_output,
                 repeat_image=False,
                 high_res_features=high_res_features,
             )
+
+            # IFP parity: when SAM emits several masks for a prompt, keep the
+            # one SAM itself scores highest (argmax IoU prediction), exactly
+            # like the original IFP SamPredictor(multimask_output=True) path.
+            if multimask_output and low_res_mask.shape[1] > 1:
+                best = int(torch.argmax(iou_predictions[0]).item())
+                low_res_mask = low_res_mask[:, best:best + 1]
+                iou_predictions = iou_predictions[:, best:best + 1]
 
             masks = F.interpolate(
                 low_res_mask,

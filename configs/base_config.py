@@ -5,10 +5,10 @@ base_config = {
     "semi": {
         "enabled": True,
         "labeled_ratio": 0.1,
+        "labeled_count": None,
         "seed": 1337,
         # With a small labeled subset, sample labeled examples more often so
         # supervised updates are not drowned out by pseudo-label updates.
-        "labeled_batch_probability": 0.5,
         "labeled_batch_probability": 0.5,
     },
     "teacher_weight": 1.0,
@@ -31,6 +31,11 @@ base_config = {
         "max_positive_points": 1,
         "min_positive_points": 1,
         "include_box": False,
+        "labeled_prompt_mode": "gt",
+        "labeled_gt_prompt_probability": 1.0,
+        "fallback_confidence_threshold": None,
+        "train_point_jitter_pixels": 0.0,
+        "train_prompt_dropout": 0.0,
         "iterative_pseudo": {
             "enabled": False,
             "max_iters": 3,
@@ -40,6 +45,9 @@ base_config = {
             "max_mask_area_ratio": 0.8,
             "min_overlap_ratio": 0.5,
             "max_new_area_ratio": 0.4,
+            # Gate pseudo supervision on student/teacher mask agreement.
+            # 0.0 disables the gate (historic behaviour).
+            "min_student_teacher_iou": 0.0,
         },
     },
     "opt": {
@@ -51,6 +59,9 @@ base_config = {
     },
     "model": {
         "type": "sam2.1_hiera_l",
+        # Historical fair-protocol WeSAM uses single-mask SAM2 decoding.
+        # Kept for compatibility; model.py intentionally ignores this switch.
+        "multimask_output": False,
         "sam2_config": "configs/sam2.1/sam2.1_hiera_l.yaml",
         "ckpt": "./checkpoints/sam2.1_hiera_large.pt",
         "freeze": {

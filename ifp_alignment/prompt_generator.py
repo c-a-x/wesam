@@ -118,6 +118,7 @@ class IFPPointPromptGenerator:
                 {
                     "in_points": (point_coords.unsqueeze(0), point_labels.unsqueeze(0)),
                     "in_box": self._box_from_points(coords, width, height),
+                    "confidence": float(image_scores[selected[0]].item()),
                 }
             )
         return prompts

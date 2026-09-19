@@ -141,6 +141,25 @@ def extract_patch_tokens(model, images: torch.Tensor, resize: int, patch_size: i
     return tokens[:, :expected_n], (expected_h, expected_w)
 
 
+@torch.no_grad()
+def extract_clip_patch_tokens(clip_model, clip_processor, images: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int]]:
+    """Return CLIP vision patch embeddings in CLIP's shared text-image space."""
+
+    image_processor = clip_processor.image_processor
+    crop_size = image_processor.crop_size
+    height = int(crop_size.get("height", crop_size.get("shortest_edge", 224)))
+    width = int(crop_size.get("width", height))
+    pixel_values = F.interpolate(images.float(), size=(height, width), mode="bilinear", align_corners=False)
+    mean = torch.tensor(image_processor.image_mean, device=images.device, dtype=pixel_values.dtype).view(1, -1, 1, 1)
+    std = torch.tensor(image_processor.image_std, device=images.device, dtype=pixel_values.dtype).view(1, -1, 1, 1)
+    pixel_values = (pixel_values - mean) / std
+    vision_output = clip_model.vision_model(pixel_values=pixel_values)
+    tokens = clip_model.visual_projection(vision_output.last_hidden_state[:, 1:])
+    patch_size = int(clip_model.config.vision_config.patch_size)
+    grid_h, grid_w = height // patch_size, width // patch_size
+    return F.normalize(tokens, dim=-1), (grid_h, grid_w)
+
+
 def pixel_mask_to_patch_mask(mask, resize: int, patch_size: int, threshold: float = 0.5) -> torch.Tensor:
     """Map a binary pixel mask to the DINO patch grid."""
 

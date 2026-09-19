@@ -36,13 +36,27 @@ class ISICDataset(Dataset):
         semi_cfg = getattr(self.cfg, "semi", {})
         enabled = bool(getattr(semi_cfg, "enabled", False))
         ratio = float(getattr(semi_cfg, "labeled_ratio", 1.0))
+        labeled_count = getattr(semi_cfg, "labeled_count", None)
+        explicit_indices = getattr(semi_cfg, "labeled_indices", None)
         seed = int(getattr(semi_cfg, "seed", 1337))
 
         if not self.training or not enabled:
             return [True] * len(self.name_list)
 
-        ratio = min(max(ratio, 0.0), 1.0)
-        num_labeled = round(len(self.name_list) * ratio)
+        if explicit_indices is not None:
+            labeled_indices = {int(index) for index in explicit_indices}
+            if any(index < 0 or index >= len(self.name_list) for index in labeled_indices):
+                raise ValueError("semi.labeled_indices contains an out-of-range index.")
+            return [idx in labeled_indices for idx in range(len(self.name_list))]
+        if labeled_count is None:
+            ratio = min(max(ratio, 0.0), 1.0)
+            num_labeled = round(len(self.name_list) * ratio)
+        else:
+            num_labeled = int(labeled_count)
+            if not 0 <= num_labeled <= len(self.name_list):
+                raise ValueError(
+                    f"labeled_count must be within [0, {len(self.name_list)}], got {num_labeled}."
+                )
         rng = random.Random(seed)
         labeled_indices = set(rng.sample(range(len(self.name_list)), num_labeled))
         return [idx in labeled_indices for idx in range(len(self.name_list))]
@@ -273,6 +287,7 @@ def _make_semi_supervised_sampler(dataset, cfg):
         getattr(semi_cfg, "labeled_batch_probability", 0.5)
     )
     labeled_probability = min(max(labeled_probability, 0.0), 1.0)
+
     weights = torch.where(
         labels,
         torch.full_like(labels, labeled_probability / labeled, dtype=torch.float),

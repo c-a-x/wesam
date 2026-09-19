@@ -1,0 +1,44 @@
+% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{multirow}
+% Dice is mean F1. Values are final test metrics multiplied by 100.
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Ablation results for group 1 under the 1\% labeled setting.}
+\label{tab:ablation-group1-1pct}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrr}
+\toprule
+\multirow{2}{*}{Methods} & \multirow{2}{*}{Dataset} & \multicolumn{2}{c}{1\% labeled} \\
+ &  & Dice(\%) & IoU(\%) \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{ISIC}} & 21.29 & 15.67 \\
+DINO-only &  & 65.48 & 55.58 \\
+IFP-only &  & \textbf{70.92} & \textbf{60.49} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{Kvasir}} & 13.19 & 9.05 \\
+DINO-only &  & 76.70 & 68.72 \\
+IFP-only &  & \textbf{77.47} & \textbf{69.04} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{CVC-ClinicDB}} & 5.88 & 3.94 \\
+DINO-only &  & 67.78 & 60.33 \\
+IFP-only &  & \textbf{69.50} & \textbf{61.78} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{CVC-ColonDB}} & 11.55 & 7.64 \\
+DINO-only &  & 67.27 & 60.24 \\
+IFP-only &  & \textbf{71.91} & \textbf{64.46} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{CVC-300}} & 5.44 & 2.87 \\
+DINO-only &  & 81.01 & 73.54 \\
+IFP-only &  & \textbf{81.08} & \textbf{73.69} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{ETIS-LaribPolypDB}} & 6.15 & 3.84 \\
+DINO-only &  & 57.81 & 51.56 \\
+IFP-only &  & \textbf{58.11} & \textbf{51.76} \\
+\midrule
+CLIP-only & Mean (6 datasets) & 10.58 & 7.17 \\
+DINO-only & Mean (6 datasets) & 69.34 & 61.66 \\
+IFP-only & Mean (6 datasets) & \textbf{71.50} & \textbf{63.54} \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

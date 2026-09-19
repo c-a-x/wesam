@@ -14,7 +14,8 @@ from datasets import call_load_dataset
 from model import Model
 from utils.eval_utils import AverageMeter, calc_iou, validate
 from utils.tools import copy_model, create_csv, momentum_update, reduce_instances
-from ifp_alignment import IFPPointPromptGenerator
+from ifp_alignment import build_prompt_generator
+from utils.prompt_policy import apply_prompt_policy
 
 
 def _gt_positive_prompt(gt_mask: torch.Tensor, device: torch.device) -> dict | None:
@@ -45,11 +46,17 @@ def _gt_positive_prompt(gt_mask: torch.Tensor, device: torch.device) -> dict | N
     return {"in_points": (point_xy, labels), "in_box": None}
 
 
-def _replace_labeled_prompts(prompts: list[dict], gt_masks, has_gts: torch.Tensor) -> list[dict]:
-    """Use a GT-mask interior point for every labeled training sample."""
+def _replace_labeled_prompts(
+    prompts: list[dict], gt_masks, has_gts: torch.Tensor, probability: float = 1.0,
+) -> list[dict]:
+    """Optionally replace labeled IFP points with GT interior points."""
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("labeled_gt_prompt_probability must be in [0, 1]")
     updated = list(prompts)
     for index, (gt_mask, has_gt) in enumerate(zip(gt_masks, has_gts)):
         if not bool(has_gt):
+            continue
+        if probability < 1.0 and bool(torch.rand((), device=gt_mask.device) >= probability):
             continue
         gt_prompt = _gt_positive_prompt(gt_mask, prompts[index]["in_points"][0].device)
         if gt_prompt is not None:
@@ -116,6 +123,7 @@ def train_sam(
         labeled_counts = AverageMeter()
         unlabeled_counts = AverageMeter()
         pseudo_counts = AverageMeter()
+        gated_counts = AverageMeter()
         total_losses = AverageMeter()
         end = time.time()
         num_iter = len(train_dataloader)
@@ -130,22 +138,45 @@ def train_sam(
                 print(num_insts)
                 bboxes, gt_masks = reduce_instances(bboxes, gt_masks, cfg.max_nums)
 
-            prompts = _replace_labeled_prompts(prompt_generator(images_weak), gt_masks, has_gts)
+            prompts = (prompt_generator(images_weak, gt_masks)
+                       if getattr(prompt_generator, "requires_gt_masks", False)
+                       else prompt_generator(images_weak))
+            if (
+                cfg.prompt_generator.backend != "no-prompt"
+                and cfg.prompt_generator.labeled_prompt_mode in {"gt", "mixed"}
+            ):
+                prompts = _replace_labeled_prompts(
+                    prompts, gt_masks, has_gts,
+                    cfg.prompt_generator.labeled_gt_prompt_probability,
+                )
+            prompts = apply_prompt_policy(
+                prompts, cfg.prompt_generator, images_weak.shape[-2:], training=True
+            )
 
             has_unlabeled = any(not bool(has_gt) for has_gt in has_gts)
-            with torch.no_grad():
+            # The EMA Teacher is not passed through ``fabric.setup()``, so it
+            # needs Fabric's autocast context explicitly. Student forward is
+            # autocast by the Fabric-wrapped module itself.
+            with torch.inference_mode(), fabric.autocast():
                 if has_unlabeled:
-                    anchor_image_embeds, anchor_masks, anchor_iou_predictions, anchor_res_masks = anchor_model(images_weak, prompts)
+                    if teacher_model is None:
+                        raise RuntimeError("Unlabeled samples require an EMA Teacher model.")
+                    if anchor_model is not None:
+                        anchor_image_embeds, anchor_masks, anchor_iou_predictions, anchor_res_masks = anchor_model(images_weak, prompts)
+                    else:
+                        anchor_image_embeds = None
+                        anchor_masks = [None] * batch_size
+                        anchor_res_masks = [None] * batch_size
                     if (
                         prompt_generator is not None
                         and cfg.prompt_generator.iterative_pseudo.enabled
                     ):
                         iterative_cfg = cfg.prompt_generator.iterative_pseudo
                         (
-                            soft_image_embeds,
+                            _soft_image_embeds,
                             soft_masks,
-                            soft_iou_predictions,
-                            soft_res_masks,
+                            _soft_iou_predictions,
+                            _soft_res_masks,
                         ) = prompt_generator.iterative_teacher_pseudo_labels(
                             teacher_model,
                             images_weak,
@@ -158,7 +189,12 @@ def train_sam(
                             max_new_area_ratio=iterative_cfg.max_new_area_ratio,
                         )
                     else:
-                        soft_image_embeds, soft_masks, soft_iou_predictions, soft_res_masks = teacher_model(images_weak, prompts)
+                        _, soft_masks, _, _ = teacher_model(images_weak, prompts)
+                    # The teacher cache is not needed after producing masks;
+                    # retaining it increases the peak when the student runs.
+                    teacher_model.image_embeddings = None
+                    teacher_model.vision_pos_enc = None
+                    teacher_model.high_res_feats = None
                 else:
                     anchor_image_embeds = None
                     anchor_masks = [None] * batch_size
@@ -166,6 +202,10 @@ def train_sam(
                     soft_masks = [None] * batch_size
 
             pred_image_embeds, pred_masks, iou_predictions, pred_res_masks = model(images_strong, prompts)   # student
+            if cfg.contrast_weight <= 0:
+                # Avoid keeping a large feature tensor alive through the loss
+                # loop when contrastive alignment is disabled.
+                pred_image_embeds = None
 
             num_masks = sum(len(pred_mask) for pred_mask in pred_masks)
             loss_focal = torch.tensor(0., device=fabric.device)
@@ -175,29 +215,63 @@ def train_sam(
             loss_contra = torch.tensor(0., device=fabric.device)
             unlabeled_count = 0
             pseudo_count = 0
+            gated_count = 0
+            unlabeled_indices = []
+            agreement_gate = float(
+                getattr(
+                    cfg.prompt_generator.iterative_pseudo,
+                    "min_student_teacher_iou",
+                    0.0,
+                )
+                or 0.0
+            )
 
             for i, (pred_mask, soft_mask, anchor_mask, iou_prediction) in enumerate(zip(pred_masks, soft_masks, anchor_masks, iou_predictions)):
                 if bool(has_gts[i]):
                     continue
 
                 unlabeled_count += 1
-                anchor_mask = (anchor_mask > 0.).float()
-                if cfg.contrast_weight > 0:
-                    loss_contra += contra_loss(
-                        pred_image_embeds[i], anchor_image_embeds[i],
-                        pred_res_masks[i], anchor_res_masks[i].clone().detach(),
-                    )
+                unlabeled_indices.append(i)
 
-                loss_anchor += dice_loss(pred_mask, anchor_mask)
+                if cfg.anchor_weight > 0:
+                    if anchor_mask is None:
+                        raise RuntimeError("Anchor loss requires an Anchor model.")
+                    loss_anchor += dice_loss(pred_mask, (anchor_mask > 0.).float())
 
                 soft_mask = (soft_mask > 0.).float()
                 if soft_mask.sum().item() == 0:
                     continue
+
+                # Reject pseudo supervision when the student and teacher
+                # disagree: a low-agreement sample is exactly the case where
+                # the teacher prompt/mask is untrustworthy, and fitting it
+                # would reinforce the teacher's error.
+                if agreement_gate > 0.0:
+                    agreement = float(calc_iou(pred_mask, soft_mask).reshape(-1)[0].item())
+                    if agreement < agreement_gate:
+                        gated_count += 1
+                        continue
+
                 pseudo_count += 1
                 loss_focal += focal_loss(pred_mask, soft_mask)
                 loss_dice += dice_loss(pred_mask, soft_mask)
                 batch_iou = calc_iou(pred_mask, soft_mask)
                 loss_iou += F.mse_loss(iou_prediction, batch_iou, reduction='sum')
+
+            # ContraLoss needs cross-image negatives. Calling it once per
+            # image always gives a zero loss because its similarity matrix is
+            # 1x1. Restrict it to the unlabeled subset to keep anchor/student
+            # alignment independent of the GT-supervised samples.
+            if cfg.contrast_weight > 0 and len(unlabeled_indices) >= 2:
+                if anchor_image_embeds is None:
+                    raise RuntimeError("Contrast loss requires an Anchor model.")
+                indices = torch.tensor(unlabeled_indices, device=pred_image_embeds.device)
+                loss_contra = contra_loss(
+                    pred_image_embeds.index_select(0, indices),
+                    anchor_image_embeds.index_select(0, indices),
+                    torch.cat([pred_res_masks[i] for i in unlabeled_indices], dim=0),
+                    torch.cat([anchor_res_masks[i] for i in unlabeled_indices], dim=0).detach(),
+                )
 
             if pseudo_count > 0:
                 loss_focal = loss_focal / pseudo_count
@@ -205,7 +279,6 @@ def train_sam(
                 loss_iou = loss_iou / pseudo_count
             if unlabeled_count > 0:
                 loss_anchor = loss_anchor / unlabeled_count
-                loss_contra = loss_contra / unlabeled_count
 
             # GT 监督 loss: only exposed labeled samples use ground-truth masks.
             loss_sup = torch.tensor(0., device=fabric.device)
@@ -232,12 +305,18 @@ def train_sam(
                           unsup_ramp * cfg.anchor_weight * loss_anchor +
                           unsup_ramp * cfg.contrast_weight * loss_contra +
                           cfg.supervised_weight * loss_sup)
-            fabric.backward(loss_total)
-
-            optimizer.step()
-            momentum_update(model, teacher_model, momentum=cfg.ema_rate)
-            scheduler.step()
+            # A batch can contain only unlabeled images whose Teacher masks
+            # were all rejected. It has no supervised or pseudo-label signal.
+            if loss_total.requires_grad:
+                fabric.backward(loss_total)
+                optimizer.step()
+                if teacher_model is not None:
+                    momentum_update(model, teacher_model, momentum=cfg.ema_rate)
+                scheduler.step()
             optimizer.zero_grad()
+            model.image_embeddings = None
+            model.vision_pos_enc = None
+            model.high_res_feats = None
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -252,6 +331,7 @@ def train_sam(
             labeled_counts.update(labeled_count, batch_size)
             unlabeled_counts.update(unlabeled_count, batch_size)
             pseudo_counts.update(pseudo_count, batch_size)
+            gated_counts.update(gated_count, batch_size)
             total_losses.update(loss_total.item(), batch_size)
 
             fabric.print(f'Epoch: [{epoch}][{iter + 1}/{len(train_dataloader)}]'
@@ -267,6 +347,7 @@ def train_sam(
                          f' | Labeled Count [{labeled_counts.val:.0f} ({labeled_counts.avg:.2f})]'
                          f' | Unlabeled Count [{unlabeled_counts.val:.0f} ({unlabeled_counts.avg:.2f})]'
                          f' | Valid Pseudo [{pseudo_counts.val:.0f} ({pseudo_counts.avg:.2f})]'
+                         f' | Gated Pseudo [{gated_counts.val:.0f} ({gated_counts.avg:.2f})]'
                          f' | Total Loss [{total_losses.val:.4f} ({total_losses.avg:.4f})]')
 
             loss_logger = {"Focal Loss": focal_losses.avg, "Dice Loss": dice_losses.avg,
@@ -274,6 +355,7 @@ def train_sam(
                 "Anchor Loss": anchor_losses.avg, "Contrast Loss": contra_losses.avg,
                 "Supervised Loss": sup_losses.avg, "Labeled Count": labeled_counts.avg,
                 "Unlabeled Count": unlabeled_counts.avg, "Valid Pseudo": pseudo_counts.avg,
+                "Gated Pseudo": gated_counts.avg,
                 "Total Loss": total_losses.avg}
             fabric.log_dict(loss_logger, num_iter * (epoch - 1) + iter)
 
@@ -332,13 +414,15 @@ def main(cfg: Box) -> None:
     fabric = L.Fabric(accelerator="auto",
                       devices=num_devices,
                       strategy="auto",
+                      precision=getattr(cfg, "precision", "32-true"),
                       loggers=[TensorBoardLogger(cfg.out_dir)])
     fabric.launch()
-    fabric.seed_everything(1337 + fabric.global_rank)
+    fabric.seed_everything(int(cfg.semi.seed) + fabric.global_rank)
 
     prompt_generator = None
-    if cfg.prompt_generator.backend == "ifp":
-        prompt_generator = IFPPointPromptGenerator(
+    if cfg.prompt_generator.backend in {"ifp", "dino-prototype", "clip-only", "no-prompt", "gt-oracle"}:
+        prompt_generator = build_prompt_generator(
+            cfg.prompt_generator.backend,
             fabric.device,
             checkpoint_path=cfg.prompt_generator.alignment_checkpoint,
             background_checkpoint_path=cfg.prompt_generator.background_alignment_checkpoint or None,
@@ -355,7 +439,7 @@ def main(cfg: Box) -> None:
         )
         dino = None
     else:
-        raise ValueError("The streamlined project supports only the IFP prompt backend")
+        raise ValueError(f"Unsupported prompt backend: {cfg.prompt_generator.backend}")
 
     if fabric.global_rank == 0:
         os.makedirs(os.path.join(cfg.out_dir, "save"), exist_ok=True)
@@ -378,11 +462,15 @@ def main(cfg: Box) -> None:
         model.load_state_dict(full_checkpoint["model"])
         optimizer.load_state_dict(full_checkpoint["optimizer"])
 
-    anchor_model = copy_model(model)
-    teacher_model = copy_model(model)
+    fully_supervised = cfg.semi.labeled_ratio >= 1.0
+    # The Anchor has no role when neither of its losses is enabled. Avoid
+    # keeping a full frozen SAM2 copy and running its inference in that case.
+    needs_anchor = cfg.anchor_weight > 0 or cfg.contrast_weight > 0
+    anchor_model = None if fully_supervised or not needs_anchor else copy_model(model)
+    teacher_model = None if fully_supervised else copy_model(model)
 
     validate(
-        fabric, cfg, anchor_model, dino, val_data, image_prompt_path, mask_prompt_path, name=cfg.name, epoch=0,
+        fabric, cfg, model, dino, val_data, image_prompt_path, mask_prompt_path, name=cfg.name, epoch=0,
         prompt_generator=prompt_generator,
     )
     train_sam(

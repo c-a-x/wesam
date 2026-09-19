@@ -22,6 +22,7 @@ from ifp_alignment.common import (
     DEFAULT_IFP_ROOT,
     ProjectionHead,
     default_resize,
+    extract_clip_patch_tokens,
     extract_patch_tokens,
     get_patch_size,
     load_clip_model,
@@ -33,7 +34,7 @@ from ifp_alignment.common import (
 
 class MedicalReferenceDataset(Dataset):
     def __init__(
-        self, root: Path, dino, resize: int, patch_size: int, target: str, device,
+        self, root: Path, extract_tokens, resize: int, patch_size: int, target: str, device,
         max_references: int | None = None, reference_seed: int = 42,
     ):
         self.image_dir = root / "reference_images"
@@ -55,7 +56,7 @@ class MedicalReferenceDataset(Dataset):
                 if (self.image_dir / name).suffix.lower() in {".jpg", ".jpeg", ".png"}
             ]
             self.files = random.Random(reference_seed).sample(original_order, max_references)
-        self.dino = dino
+        self.extract_tokens = extract_tokens
         self.resize = resize
         self.patch_size = patch_size
         self.target = target
@@ -109,7 +110,7 @@ class MedicalReferenceDataset(Dataset):
 
         image = Image.open(image_path).convert("RGB")
         image_tensor = torch.from_numpy(np.asarray(image)).permute(2, 0, 1).float().div(255).unsqueeze(0)
-        tokens, _ = extract_patch_tokens(self.dino, image_tensor.to(self.device), self.resize, self.patch_size)
+        tokens, _ = self.extract_tokens(image_tensor.to(self.device))
         foreground = np.asarray(Image.open(mask_path).convert("L")) > 127
         patch_mask = pixel_mask_to_patch_mask(foreground, self.resize, self.patch_size).flatten().to(self.device)
         if self.target == "background":
@@ -136,6 +137,7 @@ def parse_args():
     parser.add_argument("--target", choices=("foreground", "background"), default="foreground")
     parser.add_argument("--dino-variant", choices=("dino3b", "dino3h", "dino3l"), default="dino3h")
     parser.add_argument("--clip-variant", choices=("clipb", "clipl"), default="clipb")
+    parser.add_argument("--vision-backbone", choices=("dino", "clip"), default="dino")
     parser.add_argument("--ifp-root", default=DEFAULT_IFP_ROOT)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resize", type=int, default=None)
@@ -161,15 +163,23 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
-    resize = args.resize or default_resize(args.dino_variant)
-    resize = resize // get_patch_size(args.dino_variant) * get_patch_size(args.dino_variant)
-
-    dino = load_dino_model(args.dino_variant, device, args.ifp_root)
     clip, clip_processor = load_clip_model(args.clip_variant, device, args.ifp_root)
     raw_text = text_features(clip, clip_processor, args.prompts, device).mean(dim=0, keepdim=True)
 
+    if args.vision_backbone == "dino":
+        resize = args.resize or default_resize(args.dino_variant)
+        patch_size = get_patch_size(args.dino_variant)
+        resize = resize // patch_size * patch_size
+        dino = load_dino_model(args.dino_variant, device, args.ifp_root)
+        extract_tokens = lambda images: extract_patch_tokens(dino, images, resize, patch_size)
+    else:
+        patch_size = int(clip.config.vision_config.patch_size)
+        crop_size = clip_processor.image_processor.crop_size
+        resize = int(crop_size.get("height", crop_size.get("shortest_edge", 224)))
+        extract_tokens = lambda images: extract_clip_patch_tokens(clip, clip_processor, images)
+
     dataset = MedicalReferenceDataset(
-        Path(args.reference_root), dino, resize, get_patch_size(args.dino_variant), args.target, device,
+        Path(args.reference_root), extract_tokens, resize, patch_size, args.target, device,
         max_references=args.max_references,
         reference_seed=args.reference_seed,
     )
@@ -210,6 +220,7 @@ def main():
                     "loss": best_loss,
                     "dino_variant": args.dino_variant,
                     "clip_variant": args.clip_variant,
+                    "vision_backbone": args.vision_backbone,
                     "prompts": args.prompts,
                     "reference_images": [path.name for path in dataset.files],
                     "resize": resize,
