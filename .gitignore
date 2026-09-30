@@ -215,3 +215,6 @@ codex.tar.gz
 # Pretrained weights and checkpoints (explicit, in addition to checkpoints/)
 *.pt
 *.ckpt
+
+# Launch/queue scripts under scripts/ are reproducible assets; keep them.
+!scripts/*.sh
