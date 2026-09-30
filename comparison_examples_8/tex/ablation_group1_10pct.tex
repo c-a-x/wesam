@@ -1,0 +1,54 @@
+% ============================================================================
+% [examples_8 / provenance] Prompt-backend ablation at 10% (frozen SAM2, no
+%   training). CLIP/DINO/IFP-only numbers from
+%   fair_ablation_10pct_seed1337/group1/*_only. Under the 10% protocol the
+%   nested support set is fixed at 130 images (the aligned head trained on
+%   130 references scores lower than the 13-reference head used in the 1%
+%   table; on CVC-300 this makes DINO-only slightly ahead of IFP-only, which
+%   is reported as-is). No WeSAM row in this table.
+%   IFP-only still wins on mean (70.81 vs DINO 69.29, CLIP 10.58).
+% ============================================================================
+% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{multirow}
+% Dice is mean F1. Values are final test metrics multiplied by 100.
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Ablation results for group 1 under the 10\% labeled setting.}
+\label{tab:ablation-group1-10pct}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrr}
+\toprule
+\multirow{2}{*}{Methods} & \multirow{2}{*}{Dataset} & \multicolumn{2}{c}{10\% labeled} \\
+ &  & Dice(\%) & IoU(\%) \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{ISIC}} & 21.29 & 15.67 \\
+DINO-only &  & 66.03 & 56.07 \\
+IFP-only &  & \textbf{71.72} & \textbf{61.27} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{Kvasir}} & 13.19 & 9.05 \\
+DINO-only &  & 76.00 & 68.34 \\
+IFP-only &  & \textbf{76.98} & \textbf{68.80} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{CVC-ClinicDB}} & 5.88 & 3.94 \\
+DINO-only &  & 66.38 & 59.10 \\
+IFP-only &  & \textbf{67.38} & \textbf{59.42} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{CVC-ColonDB}} & 11.55 & 7.64 \\
+DINO-only &  & 68.69 & 61.46 \\
+IFP-only &  & \textbf{71.37} & \textbf{63.83} \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{CVC-300}} & 5.44 & 2.87 \\
+DINO-only &  & \textbf{81.33} & \textbf{74.04} \\
+IFP-only &  & 79.82 & 72.44 \\
+\midrule
+CLIP-only & \multirow{3}{*}{\rotatebox{90}{ETIS-LaribPolypDB}} & 6.15 & 3.84 \\
+DINO-only &  & 57.31 & 51.15 \\
+IFP-only &  & \textbf{57.59} & \textbf{51.26} \\
+\midrule
+CLIP-only & Mean (6 datasets) & 10.58 & 7.17 \\
+DINO-only & Mean (6 datasets) & 69.29 & 61.69 \\
+IFP-only & Mean (6 datasets) & \textbf{70.81} & \textbf{62.84} \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

@@ -99,7 +99,8 @@ def train_sam(
     scheduler: _FabricOptimizer,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
-    image_prompt_path, mask_prompt_path, prompt_generator=None
+    image_prompt_path, mask_prompt_path, prompt_generator=None,
+    eval_prompt_generator=None,
 ):
     """The SAM training loop."""
 
@@ -120,6 +121,8 @@ def train_sam(
         anchor_losses = AverageMeter()
         contra_losses = AverageMeter()
         sup_losses = AverageMeter()
+        ifp_consistency_losses = AverageMeter()
+        ifp_consistency_counts = AverageMeter()
         labeled_counts = AverageMeter()
         unlabeled_counts = AverageMeter()
         pseudo_counts = AverageMeter()
@@ -138,20 +141,36 @@ def train_sam(
                 print(num_insts)
                 bboxes, gt_masks = reduce_instances(bboxes, gt_masks, cfg.max_nums)
 
-            prompts = (prompt_generator(images_weak, gt_masks)
-                       if getattr(prompt_generator, "requires_gt_masks", False)
-                       else prompt_generator(images_weak))
-            if (
-                cfg.prompt_generator.backend != "no-prompt"
-                and cfg.prompt_generator.labeled_prompt_mode in {"gt", "mixed"}
-            ):
-                prompts = _replace_labeled_prompts(
-                    prompts, gt_masks, has_gts,
-                    cfg.prompt_generator.labeled_gt_prompt_probability,
+            hybrid_enabled = float(
+                getattr(cfg, "ifp_consistency_weight", 0.0) or 0.0
+            ) > 0.0
+            if hybrid_enabled:
+                # Main teacher/student path deliberately receives no prompt.
+                # IFP is an auxiliary branch only, so prompt errors cannot
+                # overwrite the no-prompt pseudo-label target.
+                prompts = None
+                ifp_prompts = (prompt_generator(images_weak, gt_masks)
+                               if getattr(prompt_generator, "requires_gt_masks", False)
+                               else prompt_generator(images_weak))
+                ifp_prompts = apply_prompt_policy(
+                    ifp_prompts, cfg.prompt_generator,
+                    images_weak.shape[-2:], training=True
                 )
-            prompts = apply_prompt_policy(
-                prompts, cfg.prompt_generator, images_weak.shape[-2:], training=True
-            )
+            else:
+                prompts = (prompt_generator(images_weak, gt_masks)
+                           if getattr(prompt_generator, "requires_gt_masks", False)
+                           else prompt_generator(images_weak))
+                if (
+                    cfg.prompt_generator.backend != "no-prompt"
+                    and cfg.prompt_generator.labeled_prompt_mode in {"gt", "mixed"}
+                ):
+                    prompts = _replace_labeled_prompts(
+                        prompts, gt_masks, has_gts,
+                        cfg.prompt_generator.labeled_gt_prompt_probability,
+                    )
+                prompts = apply_prompt_policy(
+                    prompts, cfg.prompt_generator, images_weak.shape[-2:], training=True
+                )
 
             has_unlabeled = any(not bool(has_gt) for has_gt in has_gts)
             # The EMA Teacher is not passed through ``fabric.setup()``, so it
@@ -201,8 +220,23 @@ def train_sam(
                     anchor_res_masks = [None] * batch_size
                     soft_masks = [None] * batch_size
 
-            pred_image_embeds, pred_masks, iou_predictions, pred_res_masks = model(images_strong, prompts)   # student
-            if cfg.contrast_weight <= 0:
+            if hybrid_enabled:
+                # Main no-prompt path is computed exactly as in the
+                # no-prompt baseline. The auxiliary IFP path runs under
+                # no_grad() and no longer updates the shared encoder/LoRA.
+                # The auxiliary loss therefore cannot change the main
+                # solution; it is used only for soft diagnostic gating.
+                pred_image_embeds = model.encode(images_strong)
+                pred_masks, iou_predictions, pred_res_masks = model.decode(
+                    images_strong.shape[-2:], None, prompt_mode="none"
+                )
+                with torch.no_grad():
+                    ifp_masks, _, _ = model.decode(
+                        images_strong.shape[-2:], ifp_prompts, prompt_mode="point"
+                    )
+            else:
+                pred_image_embeds, pred_masks, iou_predictions, pred_res_masks = model(images_strong, prompts)   # student
+            if cfg.contrast_weight <= 0 and not hybrid_enabled:
                 # Avoid keeping a large feature tensor alive through the loss
                 # loop when contrastive alignment is disabled.
                 pred_image_embeds = None
@@ -296,6 +330,34 @@ def train_sam(
             if labeled_count > 0:
                 loss_sup = loss_sup / labeled_count
 
+            # Auxiliary consistency branch: IFP is fully detached from the
+            # optimiser in v3. We still report its disagreement with the main
+            # no-prompt target as a diagnostic, but add NO gradient term.
+            loss_ifp_consistency = torch.tensor(0., device=fabric.device)
+            ifp_consistency_count = 0
+            if hybrid_enabled:
+                with torch.no_grad():
+                    for i, ifp_mask_i in enumerate(ifp_masks):
+                        if bool(has_gts[i]):
+                            gt_mask_item = gt_masks[i]
+                            if gt_mask_item.dim() == 3 and gt_mask_item.shape[0] > 1:
+                                target_i = (gt_mask_item.sum(dim=0) > 0).float()
+                            else:
+                                target_i = gt_mask_item.squeeze(0).float()
+                        else:
+                            if soft_masks[i] is None:
+                                continue
+                            target_i = (soft_masks[i] > 0).float()
+                        if target_i.sum().item() == 0:
+                            continue
+                        loss_ifp_consistency += (
+                            focal_loss(ifp_mask_i, target_i) +
+                            dice_loss(ifp_mask_i, target_i)
+                        )
+                        ifp_consistency_count += 1
+                    if ifp_consistency_count > 0:
+                        loss_ifp_consistency = loss_ifp_consistency / ifp_consistency_count
+
             # The former 20x focal term made a single bad pseudo-mask produce
             # a much larger update than several correctly supervised samples.
             teacher_loss = loss_focal + loss_dice + 0.1 * loss_iou
@@ -305,6 +367,8 @@ def train_sam(
                           unsup_ramp * cfg.anchor_weight * loss_anchor +
                           unsup_ramp * cfg.contrast_weight * loss_contra +
                           cfg.supervised_weight * loss_sup)
+            # v3 auxiliary branch is diagnostic-only and contributes no
+            # gradient to the main no-prompt objective.
             # A batch can contain only unlabeled images whose Teacher masks
             # were all rejected. It has no supervised or pseudo-label signal.
             if loss_total.requires_grad:
@@ -328,6 +392,8 @@ def train_sam(
             anchor_losses.update(loss_anchor.item(), batch_size)
             contra_losses.update(loss_contra.item(), batch_size)
             sup_losses.update(loss_sup.item(), batch_size)
+            ifp_consistency_losses.update(loss_ifp_consistency.item(), batch_size)
+            ifp_consistency_counts.update(ifp_consistency_count, batch_size)
             labeled_counts.update(labeled_count, batch_size)
             unlabeled_counts.update(unlabeled_count, batch_size)
             pseudo_counts.update(pseudo_count, batch_size)
@@ -344,6 +410,8 @@ def train_sam(
                          f' | Anchor Loss [{anchor_losses.val:.4f} ({anchor_losses.avg:.4f})]'
                          f' | Contrast Loss [{contra_losses.val:.4f} ({contra_losses.avg:.4f})]'
                          f' | Supervised Loss [{sup_losses.val:.4f} ({sup_losses.avg:.4f})]'
+                         f' | IFP Consistency [{ifp_consistency_losses.val:.4f} ({ifp_consistency_losses.avg:.4f})]'
+                         f' | IFP Count [{ifp_consistency_counts.val:.0f} ({ifp_consistency_counts.avg:.2f})]'
                          f' | Labeled Count [{labeled_counts.val:.0f} ({labeled_counts.avg:.2f})]'
                          f' | Unlabeled Count [{unlabeled_counts.val:.0f} ({unlabeled_counts.avg:.2f})]'
                          f' | Valid Pseudo [{pseudo_counts.val:.0f} ({pseudo_counts.avg:.2f})]'
@@ -353,7 +421,8 @@ def train_sam(
             loss_logger = {"Focal Loss": focal_losses.avg, "Dice Loss": dice_losses.avg,
                 "IoU Loss": iou_losses.avg, "Teacher Loss": teacher_losses.avg,
                 "Anchor Loss": anchor_losses.avg, "Contrast Loss": contra_losses.avg,
-                "Supervised Loss": sup_losses.avg, "Labeled Count": labeled_counts.avg,
+                "Supervised Loss": sup_losses.avg, "IFP Consistency": ifp_consistency_losses.avg,
+                "IFP Count": ifp_consistency_counts.avg, "Labeled Count": labeled_counts.avg,
                 "Unlabeled Count": unlabeled_counts.avg, "Valid Pseudo": pseudo_counts.avg,
                 "Gated Pseudo": gated_counts.avg,
                 "Total Loss": total_losses.avg}
@@ -363,7 +432,7 @@ def train_sam(
             student_iou, student_f1 = validate(
                 fabric, cfg, model, dino, val_dataloader, image_prompt_path, mask_prompt_path,
                 f"{cfg.name}_student", epoch,
-                prompt_generator=prompt_generator,
+                prompt_generator=eval_prompt_generator,
             )
             save_dir = os.path.join(cfg.out_dir, "save")
             if student_iou > best_student_iou:
@@ -441,6 +510,9 @@ def main(cfg: Box) -> None:
     else:
         raise ValueError(f"Unsupported prompt backend: {cfg.prompt_generator.backend}")
 
+    hybrid_enabled = float(getattr(cfg, "ifp_consistency_weight", 0.0) or 0.0) > 0.0
+    eval_prompt_generator = None if hybrid_enabled else prompt_generator
+
     if fabric.global_rank == 0:
         os.makedirs(os.path.join(cfg.out_dir, "save"), exist_ok=True)
         create_csv(os.path.join(cfg.out_dir, "metrics.csv"), csv_head=cfg.csv_keys)
@@ -471,11 +543,12 @@ def main(cfg: Box) -> None:
 
     validate(
         fabric, cfg, model, dino, val_data, image_prompt_path, mask_prompt_path, name=cfg.name, epoch=0,
-        prompt_generator=prompt_generator,
+        prompt_generator=eval_prompt_generator,
     )
     train_sam(
         cfg, fabric, model, dino, teacher_model, anchor_model, optimizer, scheduler, train_data, val_data,
         image_prompt_path, mask_prompt_path, prompt_generator=prompt_generator,
+        eval_prompt_generator=eval_prompt_generator,
     )
 
     final_test_list = str(getattr(cfg.datasets[cfg.dataset], "final_test_list", ""))
@@ -490,7 +563,7 @@ def main(cfg: Box) -> None:
             fabric, cfg, model, dino, test_data, image_prompt_path, mask_prompt_path,
             name=f"{cfg.name}_final_test_best_student",
             epoch=int(checkpoint.get("epoch", cfg.num_epochs)),
-            prompt_generator=prompt_generator,
+            prompt_generator=eval_prompt_generator,
         )
 
     del model, teacher_model, anchor_model, train_data, val_data

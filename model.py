@@ -54,10 +54,10 @@ class Model(nn.Module):
     def image_size(self):
         return self.model.image_size
 
-    def forward(self, images, prompts=None):
+    def forward(self, images, prompts=None, prompt_mode=None):
         _, _, H, W = images.shape
         image_embeddings = self.encode(images)
-        pred_masks, ious, res_masks = self.decode((H, W), prompts)
+        pred_masks, ious, res_masks = self.decode((H, W), prompts, prompt_mode=prompt_mode)
         return image_embeddings, pred_masks, ious, res_masks
 
     def encode(self, images):
@@ -90,13 +90,18 @@ class Model(nn.Module):
 
         return self.image_embeddings
 
-    def decode(self, image_shape, prompts=None):
+    def decode(self, image_shape, prompts=None, prompt_mode=None):
         """Decode masks from image embeddings and prompts.
 
         Args:
             image_shape: (H, W) original image size
             prompts: optional list of dicts with 'in_points' and/or 'in_box'.
                 When None, SAM2 receives no point, box, or mask prompt.
+            prompt_mode: optional explicit mode (``point``, ``box``, or
+                ``none``). The global ``cfg.prompt`` is used when omitted.
+                This is required by the hybrid path, which keeps the main
+                no-prompt branch unchanged while decoding a second times with
+                IFP points.
 
         Returns:
             pred_masks, ious, res_masks
@@ -108,6 +113,7 @@ class Model(nn.Module):
         if len(prompts) != len(self.image_embeddings):
             raise ValueError("Prompt count must match the encoded image batch size.")
 
+        mode = cfg.prompt if prompt_mode is None else prompt_mode
         multimask_output = False  # Old fair WeSAM protocol uses SAM2 single-mask decoding.
 
         pred_masks = []
@@ -130,20 +136,20 @@ class Model(nn.Module):
                 input_box = input_box.to(embedding.device)
 
             # Handle box prompts: SAM2 encodes boxes as point pairs
-            if cfg.prompt == "box" and input_box is not None:
+            if mode == "box" and input_box is not None:
                 box_coords = input_box.reshape(-1, 2, 2)
                 box_labels = torch.tensor([[2, 3]], dtype=torch.int,
                                           device=embedding.device)
                 box_labels = box_labels.repeat(input_box.shape[0], 1)
                 concat_points = (box_coords, box_labels)
 
-            elif cfg.prompt == "none":
+            elif mode == "none":
                 concat_points = None
 
-            elif cfg.prompt == "point":
+            elif mode == "point":
                 concat_points = in_points
 
-            elif cfg.prompt in ["point+box", "point+Box"]:
+            elif mode in ["point+box", "point+Box"]:
                 if input_box is not None:
                     box_coords = input_box.reshape(-1, 2, 2)
                     box_labels = torch.tensor([[2, 3]], dtype=torch.int,
@@ -158,7 +164,7 @@ class Model(nn.Module):
                 else:
                     concat_points = in_points
             else:
-                raise ValueError(f"Unsupported prompt mode: {cfg.prompt}")
+                raise ValueError(f"Unsupported prompt mode: {mode}")
 
             # Encode prompts
             sparse_embeddings, dense_embeddings = self.model.sam_prompt_encoder(

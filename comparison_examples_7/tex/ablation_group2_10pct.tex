@@ -1,0 +1,44 @@
+% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{multirow}
+% Dice is mean F1. Values are final test metrics multiplied by 100.
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Ablation of prompt-only, semi-supervised-only, and their combination under the 10\% labeled setting. IFP-only uses frozen SAM2; No prompt uses the semi-supervised framework without IFP prompts.}
+\label{tab:ablation-group2-10pct}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrr}
+\toprule
+\multirow{2}{*}{Methods} & \multirow{2}{*}{Dataset} & \multicolumn{2}{c}{10\% labeled} \\
+ &  & Dice(\%) & IoU(\%) \\
+\midrule
+IFP-only & \multirow{3}{*}{\rotatebox{90}{ISIC}} & 71.72 & 61.27 \\
+No prompt &  & 88.37 & 80.89 \\
+WeSAM &  & \textbf{89.14} & \textbf{82.10} \\
+\midrule
+IFP-only & \multirow{3}{*}{\rotatebox{90}{Kvasir}} & 76.98 & 68.80 \\
+No prompt &  & 87.18 & 80.95 \\
+WeSAM &  & \textbf{88.10} & \textbf{81.74} \\
+\midrule
+IFP-only & \multirow{3}{*}{\rotatebox{90}{CVC-ClinicDB}} & 67.38 & 59.42 \\
+No prompt &  & 80.97 & 73.43 \\
+WeSAM &  & \textbf{81.53} & \textbf{75.42} \\
+\midrule
+IFP-only & \multirow{3}{*}{\rotatebox{90}{CVC-ColonDB}} & 71.37 & 63.83 \\
+No prompt &  & 78.31 & 70.68 \\
+WeSAM &  & \textbf{79.36} & \textbf{72.25} \\
+\midrule
+IFP-only & \multirow{3}{*}{\rotatebox{90}{CVC-300}} & 79.82 & 72.44 \\
+No prompt &  & 86.95 & 80.11 \\
+WeSAM &  & \textbf{88.40} & \textbf{81.41} \\
+\midrule
+IFP-only & \multirow{3}{*}{\rotatebox{90}{ETIS-LaribPolypDB}} & 57.59 & 51.26 \\
+No prompt &  & 69.79 & 62.95 \\
+WeSAM &  & \textbf{74.35} & \textbf{67.35} \\
+\midrule
+IFP-only & Mean (6 datasets) & 70.81 & 62.84 \\
+No prompt & Mean (6 datasets) & 81.93 & 74.83 \\
+WeSAM & Mean (6 datasets) & \textbf{83.48} & \textbf{76.71} \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

@@ -211,3 +211,7 @@ codex.tar.gz
 *.nii
 *.nii.gz
 *.bak
+
+# Pretrained weights and checkpoints (explicit, in addition to checkpoints/)
+*.pt
+*.ckpt

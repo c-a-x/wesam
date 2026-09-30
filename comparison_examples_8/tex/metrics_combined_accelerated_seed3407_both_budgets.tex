@@ -1,0 +1,93 @@
+% ============================================================================
+% [examples_8 / provenance] WeSAM-vs-SOTA combined table.
+%   WeSAM numbers: "accelerated" protocol, seed 3407.
+%   - ISIC 1%:  output_current/accelerated_1pct_from_10pct_20260829/isic_seed3407
+%   - ISIC 10%: output_current/accelerated_10pct_20260828/isic_seed3407
+%   - Polyp 1%:  output_current/accelerated_1pct_from_10pct_20260829/polyp_seed3407
+%   - Polyp 10%: output_current/accelerated_10pct_20260828/polyp_seed3407
+%   Competitor rows (UA-MT/DTC/URPC/CPC-SAM/H-SAM/SAMed/BCP/KnowSAM/MC-Net)
+%   are literature reference numbers, unchanged from comparison_examples_5.
+% ============================================================================
+% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{multirow}
+% WeSAM 1% and 10% values use the same accelerated configuration and seed 3407.
+% The 1% labeled sets are nested subsets of the corresponding 10% labeled sets.
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Quantitative results on ISIC-2018 and polyp datasets under 1\% and 10\% labeled settings. WeSAM uses the same fixed accelerated configuration with seed 3407 for both budgets; the 1\% labeled sets are nested subsets of the corresponding 10\% labeled sets, with the 10\% support set fixed. A full-supervision (100\% GT) comparison under the same protocol is provided in Table~\ref{tab:fullsupervision-comparison-seed3407}, where 10\%-labeled WeSAM surpasses full supervision on both datasets.}
+\label{tab:comparison-combined-accelerated-seed3407-both-budgets}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+\multirow{2}{*}{Methods} & \multirow{2}{*}{Dataset} & \multicolumn{2}{c}{1\% labeled} & \multicolumn{2}{c}{10\% labeled} \\
+ &  & Dice(\%) & IoU(\%) & Dice(\%) & IoU(\%) \\
+\midrule
+\multirow{10}{*}{\rotatebox{90}{ISIC}} & UA-MT & 40.64 & 28.66 & 42.67 & 30.12 \\
+ & DTC & 38.37 & 27.02 & 47.83 & 34.47 \\
+ & URPC & 41.06 & 28.99 & 47.72 & 34.26 \\
+ & CPC-SAM & 82.84 & 72.42 & 87.70 & 80.24 \\
+ & H-SAM & 86.39 & 78.88 & 87.89 & 81.09 \\
+ & SAMed & 86.28 & 78.62 & 88.06 & 80.67 \\
+ & BCP & 76.37 & 67.20 & 82.10 & 73.73 \\
+ & KnowSAM & 84.48 & 76.19 & 87.21 & 79.76 \\
+ & MC-Net & 63.34 & 52.13 & 76.63 & 67.97 \\
+ & WeSAM & \textbf{87.49} & \textbf{80.23} & \textbf{88.60} & \textbf{81.54} \\
+\midrule
+\multirow{10}{*}{\rotatebox{90}{Kvasir}} & UA-MT & 30.60 & 22.98 & 48.14 & 37.90 \\
+ & DTC & 20.78 & 12.75 & 8.10 & 4.76 \\
+ & URPC & 41.96 & 32.66 & 56.22 & 45.33 \\
+ & CPC-SAM & 68.03 & 56.08 & 84.01 & 76.04 \\
+ & H-SAM & 74.96 & 66.40 & 81.10 & 73.19 \\
+ & SAMed & 66.95 & 56.63 & 83.35 & 75.70 \\
+ & BCP & 74.82 & 66.28 & 84.03 & 77.26 \\
+ & KnowSAM & 72.98 & 62.69 & 80.05 & 72.60 \\
+ & MC-Net & 33.61 & 23.76 & 73.53 & 63.39 \\
+ & WeSAM & \textbf{86.88} & \textbf{80.23} & \textbf{86.69} & \textbf{80.34} \\
+\midrule
+\multirow{10}{*}{\rotatebox{90}{CVC-ClinicDB}} & UA-MT & 29.32 & 22.54 & 29.96 & 23.01 \\
+ & DTC & 14.54 & 8.97 & 5.21 & 2.97 \\
+ & URPC & 25.99 & 20.05 & 42.62 & 33.68 \\
+ & CPC-SAM & 47.51 & 36.68 & 69.07 & 61.28 \\
+ & H-SAM & 56.68 & 48.92 & 57.00 & 49.39 \\
+ & SAMed & 52.02 & 43.45 & 71.33 & 63.93 \\
+ & BCP & 67.39 & 59.12 & 80.71 & 74.36 \\
+ & KnowSAM & 59.48 & 50.56 & 73.50 & 66.14 \\
+ & MC-Net & 8.55 & 5.77 & 68.19 & 60.67 \\
+ & WeSAM & \textbf{79.81} & \textbf{72.96} & \textbf{81.58} & \textbf{75.38} \\
+\midrule
+\multirow{10}{*}{\rotatebox{90}{CVC-ColonDB}} & UA-MT & 8.60 & 5.64 & 15.30 & 10.94 \\
+ & DTC & 16.76 & 10.31 & 7.93 & 4.69 \\
+ & URPC & 15.62 & 10.85 & 25.01 & 19.10 \\
+ & CPC-SAM & 39.70 & 30.98 & 59.78 & 52.69 \\
+ & H-SAM & 45.35 & 38.99 & 53.86 & 47.04 \\
+ & SAMed & 40.18 & 34.22 & 60.13 & 53.92 \\
+ & BCP & 46.79 & 39.03 & 59.08 & 50.94 \\
+ & KnowSAM & 47.64 & 38.79 & 51.69 & 44.43 \\
+ & MC-Net & 2.89 & 1.82 & 34.45 & 26.48 \\
+ & WeSAM & \textbf{76.67} & \textbf{69.74} & \textbf{78.37} & \textbf{71.11} \\
+\midrule
+\multirow{10}{*}{\rotatebox{90}{CVC-300}} & UA-MT & 4.63 & 2.92 & 5.64 & 4.01 \\
+ & DTC & 10.66 & 5.80 & 3.81 & 2.00 \\
+ & URPC & 10.13 & 7.58 & 16.83 & 12.60 \\
+ & CPC-SAM & 61.30 & 49.25 & 81.74 & 74.45 \\
+ & H-SAM & 72.05 & 63.44 & 73.88 & 67.23 \\
+ & SAMed & 67.80 & 59.21 & 82.07 & 76.27 \\
+ & BCP & 56.00 & 47.33 & 73.58 & 65.69 \\
+ & KnowSAM & 62.56 & 53.81 & 67.07 & 58.95 \\
+ & MC-Net & 3.20 & 1.82 & 38.66 & 27.61 \\
+ & WeSAM & \textbf{86.56} & \textbf{80.19} & \textbf{88.46} & \textbf{81.67} \\
+\midrule
+\multirow{10}{*}{\rotatebox{90}{ETIS-LaribPolypDB}} & UA-MT & 4.00 & 2.72 & 15.34 & 11.76 \\
+ & DTC & 11.50 & 6.74 & 4.75 & 2.56 \\
+ & URPC & 6.20 & 4.49 & 12.97 & 10.00 \\
+ & CPC-SAM & 25.41 & 20.17 & 44.56 & 39.31 \\
+ & H-SAM & 31.27 & 26.56 & 29.86 & 26.22 \\
+ & SAMed & 30.19 & 25.09 & 42.94 & 38.23 \\
+ & BCP & 25.61 & 20.62 & 34.59 & 29.34 \\
+ & KnowSAM & 26.30 & 20.42 & 29.70 & 25.41 \\
+ & MC-Net & 12.15 & 8.56 & 17.75 & 13.98 \\
+ & WeSAM & \textbf{69.65} & \textbf{62.61} & \textbf{72.00} & \textbf{65.06} \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

@@ -188,7 +188,7 @@ def configure(args, spec: dict, train: Path, validation: Path, test: Path, head:
     cfg.name = f"{args.dataset}_{label_tag}_seed{args.seed}"
     cfg.batch_size, cfg.val_batchsize, cfg.num_workers, cfg.num_epochs = args.batch_size, args.val_batch_size, 0, args.epochs
     cfg.load_type = "soft"
-    cfg.prompt = "none" if args.prompt_backend == "no-prompt" else "point"
+    cfg.prompt = "none" if args.prompt_backend in {"no-prompt", "hybrid"} else "point"
     cfg.resume = False
     fully_supervised = args.labeled_ratio == 1.0
     cfg.semi.enabled, cfg.semi.labeled_ratio, cfg.semi.seed = True, args.labeled_ratio, args.seed
@@ -203,7 +203,8 @@ def configure(args, spec: dict, train: Path, validation: Path, test: Path, head:
     cfg.opt.learning_rate = args.learning_rate
     cfg.opt.warmup_steps = args.warmup_steps
     prompt = cfg.prompt_generator
-    prompt.backend, prompt.ifp_root, prompt.alignment_checkpoint = args.prompt_backend, str(IFP_ROOT), str(head)
+    prompt_backend = "ifp" if args.prompt_backend == "hybrid" else args.prompt_backend
+    prompt.backend, prompt.ifp_root, prompt.alignment_checkpoint = prompt_backend, str(IFP_ROOT), str(head)
     prompt.dino_variant, prompt.clip_variant, prompt.text_prompts = "dino3h", "clipl", spec["prompts"]
     prompt.max_positive_points, prompt.min_positive_points, prompt.include_box = 1, 1, False
     prompt.labeled_prompt_mode = args.labeled_prompt_mode
@@ -211,7 +212,12 @@ def configure(args, spec: dict, train: Path, validation: Path, test: Path, head:
     prompt.fallback_confidence_threshold = args.fallback_confidence_threshold
     prompt.train_point_jitter_pixels = args.train_point_jitter_pixels
     prompt.train_prompt_dropout = args.train_prompt_dropout
-    prompt.iterative_pseudo.enabled = not fully_supervised
+    # Hybrid keeps the main no-prompt semi-supervised path. Running the
+    # iterative IFP teacher here would leak prompt errors into the pseudo-label
+    # target and defeat the purpose of the auxiliary-only branch.
+    prompt.iterative_pseudo.enabled = (
+        not fully_supervised and args.prompt_backend != "hybrid"
+    )
     prompt.iterative_pseudo.max_iters = 1
     prompt.iterative_pseudo.teacher_iou_threshold = 0.8
     prompt.iterative_pseudo.min_new_pixels = 32
@@ -220,6 +226,9 @@ def configure(args, spec: dict, train: Path, validation: Path, test: Path, head:
     prompt.iterative_pseudo.min_overlap_ratio = 0.7
     prompt.iterative_pseudo.max_new_area_ratio = 0.4
     prompt.iterative_pseudo.min_student_teacher_iou = args.min_student_teacher_iou
+    cfg.ifp_consistency_weight = (
+        args.ifp_consistency_weight if args.prompt_backend == "hybrid" else 0.0
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -266,7 +275,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--prompt-backend",
-        choices=("ifp", "dino-prototype", "clip-only", "no-prompt"),
+        choices=("ifp", "dino-prototype", "clip-only", "no-prompt", "hybrid"),
         default="ifp",
     )
     parser.add_argument(
@@ -275,6 +284,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--labeled-gt-prompt-probability", type=float, default=1.0)
     parser.add_argument("--teacher-weight", type=float, default=0.1)
+    parser.add_argument(
+        "--ifp-consistency-weight", type=float, default=0.1,
+        help=(
+            "Weight for the hybrid IFP auxiliary consistency loss. Only used "
+            "with --prompt-backend hybrid (default: 0.1)."
+        ),
+    )
     parser.add_argument("--anchor-weight", type=float, default=0.0)
     parser.add_argument("--contrast-weight", type=float, default=0.0)
     parser.add_argument(

@@ -1,0 +1,43 @@
+% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{multirow}
+% WeSAM full-supervision upper-bound comparison (seed 3407; GT-point training prompts; IFP evaluation prompts).
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Label-efficiency comparison of WeSAM against full supervision (100\% GT) under one protocol (seed 3407, GT-point training prompts, IFP evaluation prompts; parenthesized counts are labeled training images). Full supervision is no longer the performance ceiling: 10\%-labeled WeSAM surpasses full supervision on both datasets, while 1\%-labeled WeSAM retains 99\% of full-supervision performance on Polyp and already exceeds it on ISIC.}
+\label{tab:fullsupervision-comparison-seed3407}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrr}
+\toprule
+\multirow{2}{*}{Dataset} & \multirow{2}{*}{Budget} & Dice(\%) & IoU(\%) & vs Full ($\Delta$IoU) \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{ISIC}} & 1\% (26 imgs) & 87.49 & 80.23 & +0.85 \\
+ & 10\% (259 imgs) & \textbf{88.60} & \textbf{81.54} & +2.16 \\
+ & Full (2594 imgs) & 87.03 & 79.38 & — \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{Kvasir}} & 1\% (13 imgs) & 86.88 & 80.23 & +2.35 \\
+ & 10\% (130 imgs) & \textbf{86.69} & \textbf{80.34} & +2.46 \\
+ & Full (1305 imgs) & 84.66 & 77.88 & — \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{CVC-ClinicDB}} & 1\% (13 imgs) & 79.81 & 72.96 & +0.99 \\
+ & 10\% (130 imgs) & \textbf{81.58} & \textbf{75.38} & +3.41 \\
+ & Full (1305 imgs) & 78.64 & 71.97 & — \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{CVC-ColonDB}} & 1\% (13 imgs) & 76.67 & 69.74 & +2.29 \\
+ & 10\% (130 imgs) & \textbf{78.37} & \textbf{71.11} & +3.67 \\
+ & Full (1305 imgs) & 75.07 & 67.44 & — \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{CVC-300}} & 1\% (13 imgs) & 86.56 & 80.19 & -4.33 \\
+ & 10\% (130 imgs) & 88.46 & 81.67 & -2.85 \\
+ & Full (1305 imgs) & 90.91 & 84.52 & — \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{ETIS-LaribPolypDB}} & 1\% (13 imgs) & 69.65 & 62.61 & -5.15 \\
+ & 10\% (130 imgs) & 72.00 & 65.06 & -2.69 \\
+ & Full (1305 imgs) & 74.14 & 67.75 & — \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{Mean}} & 1\% & 79.92 & 73.15 & -0.77 \\
+ & 10\% & \textbf{81.42} & \textbf{74.71} & +0.80 \\
+ & Full (1305 imgs) & 80.68 & 73.91 & — \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

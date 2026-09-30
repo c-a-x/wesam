@@ -343,6 +343,13 @@ def parse_args() -> argparse.Namespace:
 
 def run() -> None:
     args = parse_args()
+    skip_file = PROJECT_ROOT / "output_current" / "fair_budget_matched_20260919" / "skip_gpu0_polyp.flag"
+    if args.gpu == 0 and skip_file.exists():
+        print(f"[SKIP GPU0] Skipping {args.output_dir.name} on GPU 0 because task was reassigned to GPU 1.")
+        return
+    if (args.output_dir / "test_metrics.csv").exists():
+        print(f"[SKIP] {args.output_dir.name} already completed (test_metrics.csv found), skipping.")
+        return
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.labeled_count is not None:

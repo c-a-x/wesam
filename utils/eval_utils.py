@@ -148,12 +148,15 @@ def validate(fabric: L.Fabric, cfg: Box, model: Model, dino, val_dataloader: Dat
                     # _, new_H, new_W = image.shape
                     # print(image.shape)
 
-                    prompts = (prompt_generator(image, [gt_masks.squeeze(0)])
-                               if getattr(prompt_generator, "requires_gt_masks", False)
-                               else prompt_generator(image))
-                    prompts = apply_prompt_policy(
-                        prompts, cfg.prompt_generator, image.shape[-2:], training=False
-                    )
+                    if prompt_generator is None:
+                        prompts = None
+                    else:
+                        prompts = (prompt_generator(image, [gt_masks.squeeze(0)])
+                                   if getattr(prompt_generator, "requires_gt_masks", False)
+                                   else prompt_generator(image))
+                        prompts = apply_prompt_policy(
+                            prompts, cfg.prompt_generator, image.shape[-2:], training=False
+                        )
                     _, pred_masks, _, _ = model(image, prompts)
 
                     # ----------- Step 1: 提取最大轮廓 & 计算指标（原尺寸） -------------
@@ -220,12 +223,15 @@ def validate(fabric: L.Fabric, cfg: Box, model: Model, dino, val_dataloader: Dat
                 # prompts = get_prompts(cfg, bboxes, gt_masks)
                 # print('prompts',prompts)
 
-                prompts = (prompt_generator(images, gt_masks)
-                           if getattr(prompt_generator, "requires_gt_masks", False)
-                           else prompt_generator(images))
-                prompts = apply_prompt_policy(
-                    prompts, cfg.prompt_generator, images.shape[-2:], training=False
-                )
+                if prompt_generator is None:
+                    prompts = None
+                else:
+                    prompts = (prompt_generator(images, gt_masks)
+                               if getattr(prompt_generator, "requires_gt_masks", False)
+                               else prompt_generator(images))
+                    prompts = apply_prompt_policy(
+                        prompts, cfg.prompt_generator, images.shape[-2:], training=False
+                    )
 
                 _, pred_masks, _, _ = model(images, prompts)
                 for pred_mask, gt_mask in zip(pred_masks, gt_masks):
